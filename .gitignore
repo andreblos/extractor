@@ -1,0 +1,5 @@
+# Ignorar saídas e extratos
+outputs/
+*.xlsx
+~.xlsx
+*.pdf
