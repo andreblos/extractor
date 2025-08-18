@@ -3,3 +3,8 @@ outputs/
 *.xlsx
 ~.xlsx
 *.pdf
+# Ignorar saídas e extratos
+outputs/
+*.xlsx
+~.xlsx
+*.pdf
