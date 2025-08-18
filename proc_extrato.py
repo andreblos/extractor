@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Processa extratos de .txt, .csv OU .pdf e exporta para XLSX com 5 colunas:
+Processa extratos de .txt, .csv OU .pdf e exporta para XLSX em outputs/<nome>_processado.xlsx
+Colunas:
 - data
 - descricao
 - penultimo_valor
 - saldo
 - linha_original
 
-Heurísticas para PDF (para ignorar cabeçalhos/rodapés):
-- Por padrão, exige data no início da linha (dd/mm/aaaa) e ao menos 2 números no padrão BR.
-- Remove linhas com termos típicos de header/footer (ex.: Página, Agência, Conta, Saldo Anterior, etc.).
-- Opções extras:
-    --min-numbers N      : exige ao menos N números BR (padrão: 2)
-    --contains "A,B,C"   : mantém apenas linhas que contenham QUALQUER destas palavras (case-insensitive)
-    --no-date-filter     : não exige data no início
-    --keep-all-lines     : não aplica heurísticas (modo bruto)
+PDF: heurísticas para ignorar cabeçalho/rodapé.
+Opções:
+  --min-numbers N       : exige ao menos N números BR na linha (padrão: 2)
+  --contains "A,B,C"    : mantém somente linhas que contenham qualquer dessas palavras
+  --no-date-filter      : não exige data no início da linha
+  --keep-all-lines      : não aplica heurísticas (modo bruto)
+  --col                 : (CSV) nome da coluna com o texto
+  --out                 : caminho XLSX alternativo (por padrão, outputs/<base>_processado.xlsx)
 
-Dependências:
+Dependências recomendadas:
   pip install pdfplumber pandas openpyxl
 """
 
@@ -27,21 +28,26 @@ import os
 import csv
 import argparse
 from typing import Tuple, List
+from pathlib import Path
 import pandas as pd
 
-# Regex para data no início: dd/mm/aaaa
+# Regex data no início: dd/mm/aaaa
 RE_DATA_INICIO = re.compile(r'^\s*(\d{2}/\d{2}/\d{4})\s+')
-
-# Números brasileiros: aceita sinal, milhares com ponto, decimais com vírgula (e inteiros).
+# Números BR: sinal opcional, milhares com ponto e decimais com vírgula
 RE_NUM_BR = re.compile(r'(?<!\d)[+-]?\d{1,3}(?:\.\d{3})*(?:,\d+)?(?![\d,])|[+-]?\d+,\d+')
 RE_NUM_BR_RUNTIME = RE_NUM_BR
 
+# Stopwords para header/footer de PDF
 STOPWORDS = [
     "PÁGINA", "PAGINA", "PÁG", "PAG", "AGÊNCIA", "AGENCIA", "CONTA", "CNPJ", "BANCO",
     "WWW", "SITE", "CENTRAL DE ATENDIMENTO", "OUVIDORIA", "ATENDIMENTO", "SAC",
     "SALDO ANTERIOR", "SALDO DO DIA", "EXTRATO", "DEMONSTRATIVO", "ENDEREÇO", "ENDERECO",
     "CPF/CNPJ", "HORÁRIO", "HORARIO"
 ]
+
+def garantir_pastas():
+    Path("inputs").mkdir(exist_ok=True)
+    Path("outputs").mkdir(exist_ok=True)
 
 def contar_numeros_br(texto: str) -> int:
     return len(RE_NUM_BR_RUNTIME.findall(texto))
@@ -64,10 +70,13 @@ def is_transaction_line(line: str, require_date: bool, min_numbers: int, contain
 def extrair_campos(linha: str) -> Tuple[str, str, str, str]:
     """
     Retorna (data, descricao, penultimo_valor, saldo).
+    - data: dd/mm/aaaa no início (se houver)
+    - descricao: entre a data e o penúltimo número
+    - penultimo_valor: penúltimo número na linha (string)
+    - saldo: último número na linha (string)
     """
     original = linha.strip()
 
-    # Detectar data inicial
     m = RE_DATA_INICIO.match(original)
     if m:
         data = m.group(1)
@@ -76,7 +85,6 @@ def extrair_campos(linha: str) -> Tuple[str, str, str, str]:
         data = ""
         sem_data = original
 
-    # Encontrar todos os números BR na linha sem a data
     nums = list(RE_NUM_BR_RUNTIME.finditer(sem_data))
     if len(nums) >= 2:
         penult_match = nums[-2]
@@ -95,9 +103,9 @@ def extrair_campos(linha: str) -> Tuple[str, str, str, str]:
 
     return data, descricao, penultimo_valor, saldo
 
-def process_txt(path: str) -> List[Tuple[str, str, str, str, str]]:
+def process_txt(path: Path) -> List[Tuple[str, str, str, str, str]]:
     rows = []
-    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+    with path.open('r', encoding='utf-8', errors='ignore') as f:
         for line in f:
             line = line.rstrip('\n')
             if not line.strip():
@@ -106,11 +114,11 @@ def process_txt(path: str) -> List[Tuple[str, str, str, str, str]]:
             rows.append((data, desc, penult, saldo, line))
     return rows
 
-def process_csv(path: str, col: str) -> List[Tuple[str, str, str, str, str]]:
+def process_csv(path: Path, col: str) -> List[Tuple[str, str, str, str, str]]:
     if not col:
         raise SystemExit("--col é obrigatório para CSV.")
     rows = []
-    with open(path, 'r', encoding='utf-8', errors='ignore', newline='') as fin:
+    with path.open('r', encoding='utf-8', errors='ignore', newline='') as fin:
         reader = csv.DictReader(fin)
         if col not in reader.fieldnames:
             raise SystemExit(f"Coluna '{col}' não encontrada. Disponíveis: {reader.fieldnames}")
@@ -122,56 +130,71 @@ def process_csv(path: str, col: str) -> List[Tuple[str, str, str, str, str]]:
             rows.append((data, desc, penult, saldo, line))
     return rows
 
-def process_pdf(path: str, keep_all: bool, require_date: bool, min_numbers: int, contains_any: List[str]) -> List[Tuple[str, str, str, str, str]]:
+def process_pdf(path: Path, keep_all: bool, require_date: bool, min_numbers: int, contains_any: List[str]) -> List[Tuple[str, str, str, str, str]]:
     try:
         import pdfplumber
     except ImportError:
         raise SystemExit("pdfplumber não instalado. Instale com: pip install pdfplumber")
 
     rows = []
-    with pdfplumber.open(path) as pdf:
+    with pdfplumber.open(str(path)) as pdf:
         for page in pdf.pages:
             text = page.extract_text() or ""
             for raw in text.splitlines():
                 line = re.sub(r'\s+', ' ', raw.strip())
                 if not line:
                     continue
-                if not keep_all and not is_transaction_line(line, require_date, min_numbers, contains_any):
+                if not keep_all and not is_transaction_line(
+                    line,
+                    require_date=require_date,
+                    min_numbers=min_numbers,
+                    contains_any=contains_any
+                ):
                     continue
                 data, desc, penult, saldo = extrair_campos(line)
                 rows.append((data, desc, penult, saldo, line))
     return rows
 
-def salvar_xlsx(rows: List[Tuple[str, str, str, str, str]], out_path: str):
+def salvar_xlsx(rows: List[Tuple[str, str, str, str, str]], out_path: Path):
     df = pd.DataFrame(rows, columns=["data", "descricao", "penultimo_valor", "saldo", "linha_original"])
-    with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with pd.ExcelWriter(str(out_path), engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="extrato")
     return out_path
 
 def main():
+    garantir_pastas()
+
     ap = argparse.ArgumentParser()
-    ap.add_argument("input", help="Arquivo de entrada (.txt, .csv ou .pdf)")
-    ap.add_argument("--col", help="Coluna com o texto (obrigatório para CSV)")
-    ap.add_argument("--out", help="Caminho de saída .xlsx (opcional)")
-    ap.add_argument("--keep-all-lines", action="store_true", help="No PDF, processa todas as linhas (sem heurísticas)")
-    ap.add_argument("--no-date-filter", action="store_true", help="Não exige data no início da linha (PDF)")
-    ap.add_argument("--min-numbers", type=int, default=2, help="Exige ao menos N números BR na linha (padrão: 2)")
-    ap.add_argument("--contains", type=str, default="", help='Mantém apenas linhas que contenham QUALQUER destas palavras, separadas por vírgula. Ex.: "PIX,TARIFA,TED"')
+    ap.add_argument("input", help="Arquivo (.txt, .csv ou .pdf) dentro de inputs/")
+    ap.add_argument("--col", help="(CSV) Nome da coluna com o texto")
+    ap.add_argument("--out", help="Caminho de saída .xlsx (opcional; padrão: outputs/<base>_processado.xlsx)")
+    ap.add_argument("--keep-all-lines", action="store_true", help="(PDF) Processa todas as linhas (sem heurísticas)")
+    ap.add_argument("--no-date-filter", action="store_true", help="(PDF) Não exige data no início da linha")
+    ap.add_argument("--min-numbers", type=int, default=2, help="(PDF) Exige ao menos N números BR na linha (padrão: 2)")
+    ap.add_argument("--contains", type=str, default="", help='(PDF) Mantém somente linhas que contenham QUALQUER destas palavras (separadas por vírgula)')
 
     args = ap.parse_args()
-    base, ext = os.path.splitext(args.input)
-    out = args.out or (base + "_processado.xlsx")
+
+    base_name = Path(args.input).name
+    input_path = Path("inputs") / base_name
+    if not input_path.exists():
+        raise SystemExit(f"Arquivo {input_path} não encontrado. Coloque-o na pasta inputs/")
+
+    base = input_path.stem
+    default_out = Path("outputs") / f"{base}_processado.xlsx"
+    out_path = Path(args.out) if args.out else default_out
 
     contains_any = [s for s in args.contains.split(",")] if args.contains else []
 
-    ext = ext.lower()
+    ext = input_path.suffix.lower()
     if ext == ".txt":
-        rows = process_txt(args.input)
+        rows = process_txt(input_path)
     elif ext == ".csv":
-        rows = process_csv(args.input, args.col)
+        rows = process_csv(input_path, args.col)
     elif ext == ".pdf":
         rows = process_pdf(
-            args.input,
+            input_path,
             keep_all=args.keep_all_lines,
             require_date=(not args.no_date_filter),
             min_numbers=args.min_numbers,
@@ -184,7 +207,7 @@ def main():
         print("Nenhuma linha processada.")
         return
 
-    caminho = salvar_xlsx(rows, out)
+    caminho = salvar_xlsx(rows, out_path)
     print(f"Gerado: {caminho}")
 
 if __name__ == "__main__":
