@@ -39,10 +39,11 @@ RE_NUM_BR_RUNTIME = RE_NUM_BR
 
 # Stopwords para header/footer de PDF
 STOPWORDS = [
-    "PÁGINA", "PAGINA", "PÁG", "PAG", "AGÊNCIA", "AGENCIA", "CONTA", "CNPJ", "BANCO",
-    "WWW", "SITE", "CENTRAL DE ATENDIMENTO", "OUVIDORIA", "ATENDIMENTO", "SAC",
-    "SALDO ANTERIOR", "SALDO DO DIA", "EXTRATO", "DEMONSTRATIVO", "ENDEREÇO", "ENDERECO",
-    "CPF/CNPJ", "HORÁRIO", "HORARIO"
+    "PÁGINA","PAGINA","PÁG","PAG", 
+    # "AGÊNCIA","AGENCIA",  # opcional remover
+    # "CONTA",              # REMOVER!
+    "CNPJ","BANCO","WWW","SITE","CENTRAL DE ATENDIMENTO","OUVIDORIA","SAC",
+    "SALDO ANTERIOR","EXTRATO","ENDEREÇO","ENDERECO","CPF/CNPJ","HORÁRIO","HORARIO"
 ]
 
 def garantir_pastas():
